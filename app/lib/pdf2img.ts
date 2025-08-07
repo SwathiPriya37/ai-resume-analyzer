@@ -5,65 +5,80 @@ export interface PdfConversionResult {
 }
 
 let pdfjsLib: any = null;
-let isLoading = false;
 let loadPromise: Promise<any> | null = null;
 
+/**
+ * Dynamically loads the PDF.js library and sets up the worker path.
+ */
 async function loadPdfJs(): Promise<any> {
     if (pdfjsLib) return pdfjsLib;
     if (loadPromise) return loadPromise;
 
-    isLoading = true;
+    // Dynamically import PDF.js (ESM build)
     // @ts-expect-error - pdfjs-dist/build/pdf.mjs is not a module
     loadPromise = import("pdfjs-dist/build/pdf.mjs").then((lib) => {
-        // Set the worker source to use local file
+        // Set the worker source to use the local file in public/
         lib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
         pdfjsLib = lib;
-        isLoading = false;
         return lib;
     });
 
     return loadPromise;
 }
 
+/**
+ * Converts the first page of a PDF file to a PNG image using PDF.js and canvas.
+ * @param file The PDF file to convert.
+ * @returns A Promise that resolves to a PdfConversionResult.
+ */
 export async function convertPdfToImage(
     file: File
 ): Promise<PdfConversionResult> {
     try {
+        console.log("convertPdfToImage called with file:", file);
+        if (!file) {
+            console.error("No file provided");
+            return { imageUrl: "", file: null, error: "No file provided" };
+        }
+
         const lib = await loadPdfJs();
+        console.log("PDF.js loaded:", lib);
 
         const arrayBuffer = await file.arrayBuffer();
-        const pdf = await lib.getDocument({ data: arrayBuffer }).promise;
-        const page = await pdf.getPage(1);
+        console.log("ArrayBuffer:", arrayBuffer);
 
-        const viewport = page.getViewport({ scale: 4 });
+        const pdf = await lib.getDocument({ data: arrayBuffer }).promise;
+        console.log("PDF loaded:", pdf);
+
+        const page = await pdf.getPage(1);
+        console.log("PDF page loaded:", page);
+
+        const viewport = page.getViewport({ scale: 2 });
         const canvas = document.createElement("canvas");
         const context = canvas.getContext("2d");
-
+        if (!context) {
+            console.error("Canvas context is null");
+            return { imageUrl: "", file: null, error: "Canvas context is null" };
+        }
         canvas.width = viewport.width;
         canvas.height = viewport.height;
 
-        if (context) {
-            context.imageSmoothingEnabled = true;
-            context.imageSmoothingQuality = "high";
-        }
-
-        await page.render({ canvasContext: context!, viewport }).promise;
+        await page.render({ canvasContext: context, viewport }).promise;
+        console.log("Page rendered on canvas");
 
         return new Promise((resolve) => {
             canvas.toBlob(
                 (blob) => {
                     if (blob) {
-                        // Create a File from the blob with the same name as the pdf
-                        const originalName = file.name.replace(/\.pdf$/i, "");
-                        const imageFile = new File([blob], `${originalName}.png`, {
+                        const imageFile = new File([blob], "resume.png", {
                             type: "image/png",
                         });
-
                         resolve({
                             imageUrl: URL.createObjectURL(blob),
                             file: imageFile,
                         });
                     } else {
+                        console.error("Failed to create blob");
                         resolve({
                             imageUrl: "",
                             file: null,
@@ -73,13 +88,14 @@ export async function convertPdfToImage(
                 },
                 "image/png",
                 1.0
-            ); // Set quality to maximum (1.0)
+            );
         });
     } catch (err) {
+        console.error("Error in convertPdfToImage:", err);
         return {
             imageUrl: "",
             file: null,
-            error: `Failed to convert PDF: ${err}`,
+            error: `Failed to convert PDF: ${err instanceof Error ? err.message : String(err)}`,
         };
     }
 }
